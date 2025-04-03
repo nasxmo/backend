@@ -1,0 +1,114 @@
+version: "3.8"
+
+services:
+  # Ory Stack
+  postgres:
+    image: postgres:13-alpine
+    environment:
+      POSTGRES_USER: ory
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: ory
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ory"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  hydra:
+    image: oryd/hydra:v2.0.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - serve
+      - all
+      - --config
+      - /etc/config/hydra/hydra.yml
+    environment:
+      DSN: postgres://ory:secret@postgres:5432/ory?sslmode=disable
+      SECRETS_SYSTEM: this-needs-to-be-changed-in-production
+      URLS_SELF_ISSUER: http://hydra:4444/
+    ports:
+      - "4444:4444"
+      - "4445:4445"
+
+  kratos:
+    image: oryd/kratos:v0.13.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - serve
+      - --config
+      - /etc/config/kratos/kratos.yml
+    environment:
+      DSN: postgres://ory:secret@postgres:5432/ory?sslmode=disable
+    ports:
+      - "4433:4433"
+      - "4434:4434"
+
+  keto:
+    image: oryd/keto:v0.8.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - serve
+      - --config
+      - /etc/config/keto/keto.yml
+    environment:
+      DSN: postgres://ory:secret@postgres:5432/ory?sslmode=disable
+    ports:
+      - "4466:4466"
+      - "4467:4467"
+
+  oathkeeper:
+    image: oryd/oathkeeper:v0.38.0
+    depends_on:
+      hydra:
+        condition: service_started
+    command:
+      - serve
+      - --config
+      - /etc/config/oathkeeper/oathkeeper.yml
+    ports:
+      - "4455:4455"
+      - "4456:4456"
+
+  # Application Services
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    depends_on:
+      - kratos
+      - hydra
+    environment:
+      ORY_KRATOS_URL: http://kratos:4433
+      ORY_HYDRA_URL: http://hydra:4445
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+      - kratos
+    environment:
+      NEXT_PUBLIC_ORY_URL: http://kratos:4433
+      NEXT_PUBLIC_BACKEND_URL: http://backend:8080
+
+  # Development Tools
+  mailhog:
+    image: mailhog/mailhog
+    ports:
+      - "8025:8025"
+
+volumes:
+  postgres_data:
